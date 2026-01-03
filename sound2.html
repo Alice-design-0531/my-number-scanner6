@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI 語音數字辨識 (手機優化版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.18.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.5.4/dist/speech-commands.min.js"></script>
+    
+    <style>
+        body { font-family: -apple-system, sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 85%; max-width: 400px; }
+        h1 { color: #1a73e8; font-size: 1.5rem; }
+        #status { color: #666; font-size: 0.85rem; margin-bottom: 20px; min-height: 1.2em; }
+        #current-word { font-size: 5rem; font-weight: bold; color: #4285f4; margin: 15px 0; height: 120px; line-height: 120px; border: 2px dashed #ddd; border-radius: 15px; background-color: #fafafa; }
+        button { width: 100%; padding: 15px; font-size: 1.1rem; cursor: pointer; border: none; border-radius: 12px; margin: 8px 0; font-weight: bold; }
+        #start-btn { background-color: #34a853; color: white; }
+        #stop-btn { background-color: #ea4335; color: white; }
+        #clear-btn { background-color: #eee; color: #333; }
+        button:disabled { background-color: #ccc; opacity: 0.6; }
+        .history-box { text-align: left; background: #f8f9fa; padding: 15px; border-radius: 10px; margin-top: 20px; }
+        #history { font-size: 1.2rem; color: #333; letter-spacing: 3px; min-height: 1.5em; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>數字辨識 (0-9)</h1>
+    <div id="status">正在載入模型... (若太久請重整)</div>
+    <div id="current-word">---</div>
+    
+    <div class="controls">
+        <button id="start-btn" onclick="startListening()">啟動掃描並錄音</button>
+        <button id="stop-btn" onclick="stopListening()" style="display:none;">停止錄音</button>
+        <button id="clear-btn" onclick="clearHistory()">清除紀錄</button>
+    </div>
+
+    <div class="history-box">
+        <strong>辨識序列：</strong>
+        <div id="history">尚未錄取數字</div>
+    </div>
+</div>
+
+<script>
+    let recognizer;
+    let fullSequence = []; 
+    let lastWord = ""; 
+    let lastTime = 0;
+
+    const numberMap = {
+        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+        "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"
+    };
+
+    // 初始化模型
+    async function initModel() {
+        try {
+            recognizer = speechCommands.create("BROWSER_FFT");
+            await recognizer.ensureModelLoaded();
+            document.getElementById('status').innerText = "● 準備就緒，請點擊按鈕說英文數字";
+            document.getElementById('status').style.color = "#34a853";
+        } catch (err) {
+            document.getElementById('status').innerText = "❌ 錯誤: " + err.message;
+        }
+    }
+
+    // 在頁面載入時先載入模型
+    window.onload = initModel;
+
+    async function startListening() {
+        const status = document.getElementById('status');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const currentDiv = document.getElementById('current-word');
+
+        try {
+            // 手機端關鍵：必須在按鈕點擊事件內恢復 AudioContext
+            if (tf.engine().backendName === 'webgl' || true) {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+            }
+
+            startBtn.style.display = "none";
+            stopBtn.style.display = "block";
+            status.innerText = "● 正在聆聽中...";
+            status.style.color = "#ea4335";
+
+            recognizer.listen(result => {
+                const labels = recognizer.wordLabels();
+                const maxScoreIndex = result.scores.indexOf(Math.max(...result.scores));
+                const word = labels[maxScoreIndex];
+                const now = Date.now();
+
+                if (numberMap.hasOwnProperty(word)) {
+                    // 手機端冷卻時間稍作調整，避免靈敏度過高
+                    const cooldown = (word === lastWord) ? 1200 : 600;
+
+                    if (now - lastTime > cooldown) {
+                        const digit = numberMap[word];
+                        currentDiv.innerText = digit;
+                        fullSequence.push(digit);
+                        updateHistory();
+                        lastWord = word;
+                        lastTime = now;
+                    }
+                }
+            }, {
+                probabilityThreshold: 0.80, // 手機雜音多，門檻稍降
+                overlapFactor: 0.5
+            });
+        } catch (err) {
+            alert("麥克風啟動失敗: " + err.message);
+            stopListening();
+        }
+    }
+
+    async function stopListening() {
+        if (recognizer && recognizer.isListening()) {
+            await recognizer.stopListening();
+            document.getElementById('start-btn').style.display = "block";
+            document.getElementById('stop-btn').style.display = "none";
+            document.getElementById('status').innerText = "● 已停止錄音";
+            document.getElementById('status').style.color = "#666";
+            document.getElementById('current-word').innerText = "---";
+            lastWord = "";
+        }
+    }
+
+    function updateHistory() {
+        const historyDiv = document.getElementById('history');
+        historyDiv.innerText = fullSequence.length > 0 ? fullSequence.join(" ") : "尚未錄取數字";
+    }
+
+    function clearHistory() {
+        fullSequence = [];
+        lastWord = "";
+        updateHistory();
+        document.getElementById('current-word').innerText = "---";
+    }
+</script>
+
+</body>
+</html>
